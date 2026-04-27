@@ -860,14 +860,12 @@ def render_home_page() -> str:
     <img class="brand-icon" src="{FAVICON_DATA_URI}" alt="favicon" />
     <div>
       <h1>File Upload Server</h1>
-      <p>Token API stays separate. Web workspace is login-protected and user-isolated.</p>
     </div>
   </div>
   <a class="button-like" href="/login">Login</a>
 </div>
 <div class="card">
   <h2>Running</h2>
-  <p class="muted">API endpoints under <code>/api/*</code> are unchanged. Web features live under the authenticated workspace.</p>
 </div>
 """
     return render_page("File Upload Server", body)
@@ -881,7 +879,6 @@ def render_login_page(next_url: str, error: str = "") -> str:
     <img class="brand-icon" src="{FAVICON_DATA_URI}" alt="favicon" />
     <div>
       <h1>Login</h1>
-      <p>Each user gets their own clipboard and upload area.</p>
     </div>
   </div>
   <form method="post" action="/login">
