@@ -478,6 +478,33 @@ def get_user_file_item(username: str, file_id: str) -> Optional[dict]:
     return None
 
 
+def delete_user_file(username: str, file_id: str) -> bool:
+    file_id = (file_id or "").strip()
+    if not file_id:
+        return False
+
+    items = load_user_files(username)
+    target: Optional[dict] = None
+    kept: List[dict] = []
+    for item in items:
+        if item.get("file_id") == file_id and target is None:
+            target = item
+        else:
+            kept.append(item)
+
+    if not target:
+        return False
+
+    file_path = user_files_dir(username) / str(target.get("stored_name") or "")
+    try:
+        file_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    save_user_files(username, kept)
+    return True
+
+
 def determine_chunk_size(total_size: int) -> int:
     mib = 1024 * 1024
     if total_size <= 64 * mib:
@@ -739,6 +766,22 @@ def render_page(title: str, body: str) -> str:
     .brand p {{ margin: 4px 0 0; color: var(--muted); font-size: 13px; }}
     .grid {{ display: grid; grid-template-columns: 1.05fr 1.2fr; gap: 22px; }}
     .stack {{ display: flex; flex-direction: column; gap: 22px; }}
+    .tab-strip {{
+      display: flex; gap: 8px; margin: -6px 0 18px; flex-wrap: wrap;
+      border-bottom: 1px solid var(--line); padding: 0 6px;
+    }}
+    .tab-button {{
+      background: transparent; color: var(--muted); border: 1px solid transparent;
+      border-bottom: 0; border-radius: 14px 14px 0 0; padding: 12px 18px;
+      margin-bottom: -1px; font-weight: 700;
+    }}
+    .tab-button:hover {{ background: #eef4ff; color: var(--text); }}
+    .tab-button.active {{
+      background: var(--card); color: var(--text); border-color: var(--line);
+      box-shadow: 0 -4px 14px rgba(37, 99, 235, 0.06);
+    }}
+    .tab-panel {{ display: none; }}
+    .tab-panel.active {{ display: block; }}
     .card {{ background: var(--card); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); padding: 22px; }}
     .card h2 {{ margin: 0 0 10px; font-size: 19px; }}
     .muted {{ color: var(--muted); font-size: 14px; }}
@@ -754,15 +797,37 @@ def render_page(title: str, body: str) -> str:
     }}
     button.secondary, .button-like.secondary {{ background: #e2e8f0; color: #0f172a; }}
     button.danger {{ background: var(--danger); }}
-    button:disabled {{ opacity: 0.6; cursor: wait; }}
+    button:disabled {{ opacity: 0.6; cursor: not-allowed; }}
     .list {{ display: flex; flex-direction: column; gap: 12px; }}
     .item {{ border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; background: #f8fbff; }}
     .item-top {{ display: flex; justify-content: space-between; gap: 12px; align-items: start; }}
     .item-title {{ font-weight: 700; word-break: break-word; }}
     .item-meta {{ margin-top: 6px; color: var(--muted); font-size: 13px; line-height: 1.5; word-break: break-word; }}
     .item-actions {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+    .text-preview {{ margin-top: 8px; color: var(--text); font-size: 14px; line-height: 1.55; word-break: break-word; white-space: normal; }}
+    .text-preview.collapsed {{
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }}
+    .text-toggle {{ margin-top: 8px; }}
+    .link-button {{ background: transparent; color: var(--accent); padding: 0; border: 0; font-weight: 600; cursor: pointer; }}
+    .link-button:hover {{ text-decoration: underline; }}
     .empty {{ color: var(--muted); padding: 10px 0; }}
     .notice {{ margin-top: 12px; font-size: 14px; color: var(--muted); }}
+    .modal-overlay {{
+      position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
+      display: none; align-items: center; justify-content: center; padding: 24px; z-index: 1000;
+    }}
+    .modal-overlay.open {{ display: flex; }}
+    .modal-card {{
+      width: min(100%, 440px); background: var(--card); border: 1px solid var(--line);
+      border-radius: 20px; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22); padding: 22px;
+    }}
+    .modal-card h3 {{ margin: 0 0 8px; font-size: 20px; }}
+    .modal-card p {{ margin: 0; color: var(--muted); line-height: 1.6; }}
+    .modal-actions {{ display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }}
     .status-pill {{
       display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 8px 12px;
       background: var(--accent-soft); color: #1d4ed8; font-size: 13px; font-weight: 700;
@@ -859,7 +924,11 @@ def render_app_page(username: str) -> str:
     <a class="button-like secondary" href="/logout">Logout</a>
   </div>
 </div>
-<div class="grid">
+<div class="tab-strip">
+  <button id="tab-clipboard" type="button" class="tab-button active" data-tab="clipboard">Clipboard</button>
+  <button id="tab-files" type="button" class="tab-button" data-tab="files">Files</button>
+</div>
+<div id="panel-clipboard" class="tab-panel active">
   <div class="stack">
     <section class="card">
       <h2>Clipboard</h2>
@@ -867,6 +936,8 @@ def render_app_page(username: str) -> str:
       <textarea id="clipboard-input" placeholder="Paste or type text here..."></textarea>
       <div class="row" style="margin-top:12px;">
         <button id="save-clipboard-btn" type="button">Save text</button>
+        <button id="copy-current-btn" type="button" class="secondary" data-action="copy-current">Copy input</button>
+        <button id="clear-current-btn" type="button" class="secondary" data-action="clear-current">Clear input</button>
         <span class="notice" id="clipboard-status"></span>
       </div>
     </section>
@@ -875,12 +946,20 @@ def render_app_page(username: str) -> str:
       <div id="clipboard-list" class="list"></div>
     </section>
   </div>
+</div>
+<div id="panel-files" class="tab-panel">
   <div class="stack">
     <section class="card">
       <h2>File upload</h2>
       <p class="muted">Chunked + parallel + resumable. Files live in your own upload directory and do not mix with token API uploads.</p>
       <div class="upload-drop">
         <input id="file-input" type="file" multiple />
+        <div class="row" style="margin-top:12px;">
+          <button id="start-upload-btn" type="button" disabled>Upload selected files</button>
+          <button id="clear-upload-selection-btn" type="button" class="secondary" disabled>Clear selection</button>
+          <span class="notice" id="upload-selection-status">No files selected.</span>
+        </div>
+        <div id="selected-files-summary" class="notice" style="margin-top:10px;"></div>
         <div class="notice">Chunk size is chosen automatically based on file size. Current browser parallelism: {parallelism}.</div>
       </div>
       <div id="upload-jobs" class="list" style="margin-top:14px;"></div>
@@ -896,9 +975,22 @@ def render_app_page(username: str) -> str:
     </section>
   </div>
 </div>
+<div id="confirm-modal" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <h3 id="confirm-modal-title">Confirm delete</h3>
+    <p id="confirm-modal-message">Are you sure?</p>
+    <div class="modal-actions">
+      <button id="confirm-modal-cancel" type="button" class="secondary">Cancel</button>
+      <button id="confirm-modal-confirm" type="button" class="danger">Delete</button>
+    </div>
+  </div>
+</div>
 <script>
 const CURRENT_USER = {username_js};
 const UPLOAD_PARALLELISM = {parallelism};
+const pendingFiles = [];
+let clipboardItemsCache = [];
+let confirmModalState = null;
 
 function escapeHtml(value) {{
   return String(value || '')
@@ -940,23 +1032,120 @@ async function fetchJson(url, options) {{
   return data;
 }}
 
+function openConfirmDialog(message, confirmLabel) {{
+  const overlay = document.getElementById('confirm-modal');
+  const messageEl = document.getElementById('confirm-modal-message');
+  const confirmButton = document.getElementById('confirm-modal-confirm');
+  const cancelButton = document.getElementById('confirm-modal-cancel');
+
+  if (!overlay || !messageEl || !confirmButton || !cancelButton) {{
+    return Promise.resolve(false);
+  }}
+
+  messageEl.textContent = message || 'Are you sure?';
+  confirmButton.textContent = confirmLabel || 'Delete';
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+
+  return new Promise((resolve) => {{
+    confirmModalState = {{ resolve }};
+  }});
+}}
+
+function closeConfirmDialog(confirmed) {{
+  const overlay = document.getElementById('confirm-modal');
+  if (overlay) {{
+    overlay.classList.remove('open');
+    overlay.setAttribute('aria-hidden', 'true');
+  }}
+  if (confirmModalState && typeof confirmModalState.resolve === 'function') {{
+    confirmModalState.resolve(Boolean(confirmed));
+  }}
+  confirmModalState = null;
+}}
+
+function switchTab(tabName) {{
+  const isClipboard = tabName !== 'files';
+  document.getElementById('tab-clipboard').classList.toggle('active', isClipboard);
+  document.getElementById('tab-files').classList.toggle('active', !isClipboard);
+  document.getElementById('panel-clipboard').classList.toggle('active', isClipboard);
+  document.getElementById('panel-files').classList.toggle('active', !isClipboard);
+}}
+
+function flashButtonText(button, nextText, durationMs) {{
+  if (!button) return;
+  const originalText = button.dataset.originalText || button.textContent || '';
+  if (!button.dataset.originalText) button.dataset.originalText = originalText;
+  if (button.__flashTimer) window.clearTimeout(button.__flashTimer);
+  button.textContent = nextText;
+  button.__flashTimer = window.setTimeout(() => {{
+    button.textContent = button.dataset.originalText || originalText;
+    button.__flashTimer = null;
+  }}, durationMs || 1200);
+}}
+
+function getClipboardItem(itemId) {{
+  return clipboardItemsCache.find((item) => String(item.id) === String(itemId));
+}}
+
+async function copyTextToClipboard(text) {{
+  if (navigator.clipboard && window.isSecureContext) {{
+    await navigator.clipboard.writeText(text);
+    return;
+  }}
+
+  const helper = document.createElement('textarea');
+  helper.value = text;
+  helper.setAttribute('readonly', 'readonly');
+  helper.style.position = 'fixed';
+  helper.style.opacity = '0';
+  document.body.appendChild(helper);
+  helper.focus();
+  helper.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(helper);
+  if (!ok) throw new Error('Copy failed');
+}}
+
+function shouldCollapseText(text) {{
+  const value = String(text || '');
+  const newlineCount = (value.match(/\\n/g) || []).length;
+  return value.length > 180 || newlineCount >= 3;
+}}
+
+function toggleClipboardExpand(id) {{
+  const content = document.getElementById('clipboard-text-' + id);
+  const toggle = document.getElementById('clipboard-toggle-' + id);
+  if (!content || !toggle) return;
+  const collapsed = content.classList.toggle('collapsed');
+  toggle.textContent = collapsed ? 'Expand' : 'Collapse';
+}}
+
 async function refreshClipboard() {{
   const list = document.getElementById('clipboard-list');
   list.innerHTML = '<div class="empty">Loading…</div>';
   const items = await fetchJson('/web/api/clipboard/items');
+  clipboardItemsCache = Array.isArray(items) ? items : [];
   if (!items.length) {{
     list.innerHTML = '<div class="empty">No saved text yet.</div>';
     return;
   }}
   list.innerHTML = items.map((item) => {{
+    const text = String(item.text || '');
+    const needsCollapse = shouldCollapseText(text);
+    const textHtml = escapeHtml(text).replace(/\\n/g, '<br>');
     return '<div class="item">'
       + '<div class="item-top">'
-      + '<div class="item-title">' + escapeHtml((item.text || '').slice(0, 120) || '(empty)') + '</div>'
+      + '<div></div>'
       + '<div class="item-actions">'
-      + '<button type="button" class="secondary" onclick="copyClipboardItem(' + JSON.stringify(item.id) + ')">Copy</button>'
-      + '<button type="button" class="danger" onclick="deleteClipboardItem(' + JSON.stringify(item.id) + ')">Delete</button>'
+      + '<button type="button" class="secondary" data-action="fill-clipboard" data-item-id="' + escapeHtml(item.id) + '">Fill</button>'
+      + '<button type="button" class="secondary" data-action="copy-clipboard" data-item-id="' + escapeHtml(item.id) + '">Copy</button>'
+      + '<button type="button" class="danger" data-action="delete-clipboard" data-item-id="' + escapeHtml(item.id) + '">Delete</button>'
       + '</div></div>'
-      + '<div class="item-meta">' + escapeHtml(item.text || '').replace(/\n/g, '<br>') + '</div>'
+      + '<div id="clipboard-text-' + escapeHtml(item.id) + '" class="text-preview' + (needsCollapse ? ' collapsed' : '') + '">' + textHtml + '</div>'
+      + (needsCollapse
+          ? '<div class="text-toggle"><button type="button" class="link-button" id="clipboard-toggle-' + escapeHtml(item.id) + '" data-action="toggle-clipboard" data-item-id="' + escapeHtml(item.id) + '">Expand</button></div>'
+          : '')
       + '<div class="item-meta">Updated: ' + escapeHtml(formatDate(item.updated_at)) + '</div>'
       + '</div>';
   }}).join('');
@@ -984,14 +1173,40 @@ async function saveClipboard() {{
   }}
 }}
 
-async function copyClipboardItem(id) {{
-  const items = await fetchJson('/web/api/clipboard/items');
-  const item = items.find((entry) => entry.id === id);
+function fillClipboardItem(id) {{
+  const item = getClipboardItem(id);
   if (!item) return;
-  await navigator.clipboard.writeText(item.text || '');
+  const input = document.getElementById('clipboard-input');
+  const status = document.getElementById('clipboard-status');
+  input.value = item.text || '';
+  input.focus();
+  if (status) status.textContent = 'Filled into input.';
+}}
+
+function clearCurrentInput() {{
+  const input = document.getElementById('clipboard-input');
+  const status = document.getElementById('clipboard-status');
+  input.value = '';
+  input.focus();
+  if (status) status.textContent = 'Input cleared.';
+}}
+
+async function copyCurrentInput(button) {{
+  const input = document.getElementById('clipboard-input');
+  await copyTextToClipboard(input.value || '');
+  flashButtonText(button || document.getElementById('copy-current-btn'), 'Copied!');
+}}
+
+async function copyClipboardItem(id, button) {{
+  const item = getClipboardItem(id);
+  if (!item) return;
+  await copyTextToClipboard(item.text || '');
+  flashButtonText(button, 'Copied!');
 }}
 
 async function deleteClipboardItem(id) {{
+  const confirmed = await openConfirmDialog('Delete this saved text?', 'Delete');
+  if (!confirmed) return;
   await fetchJson('/web/api/clipboard/items/' + encodeURIComponent(id), {{ method: 'DELETE' }});
   await refreshClipboard();
 }}
@@ -1017,6 +1232,40 @@ function updateJobProgress(job, percent, statusText, chunkingText) {{
   job.querySelector('.job-uploaded').textContent = percent.toFixed(1) + '%';
   if (statusText) job.querySelector('.job-status').textContent = statusText;
   if (chunkingText) job.querySelector('.job-chunking').textContent = chunkingText;
+}}
+
+function renderPendingSelection() {{
+  const startButton = document.getElementById('start-upload-btn');
+  const clearButton = document.getElementById('clear-upload-selection-btn');
+  const status = document.getElementById('upload-selection-status');
+  const summary = document.getElementById('selected-files-summary');
+
+  if (!pendingFiles.length) {{
+    startButton.disabled = true;
+    clearButton.disabled = true;
+    status.textContent = 'No files selected.';
+    summary.textContent = '';
+    return;
+  }}
+
+  startButton.disabled = false;
+  clearButton.disabled = false;
+  const totalBytes = pendingFiles.reduce((sum, file) => sum + (file.size || 0), 0);
+  status.textContent = pendingFiles.length + ' file(s) selected.';
+  summary.innerHTML = pendingFiles
+    .slice(0, 8)
+    .map((file) => escapeHtml(file.name) + ' (' + escapeHtml(formatBytes(file.size)) + ')')
+    .join('<br>');
+  if (pendingFiles.length > 8) {{
+    summary.innerHTML += '<br>…and ' + (pendingFiles.length - 8) + ' more';
+  }}
+  summary.innerHTML += '<br>Total: ' + escapeHtml(formatBytes(totalBytes));
+}}
+
+function clearSelectedFiles() {{
+  pendingFiles.length = 0;
+  document.getElementById('file-input').value = '';
+  renderPendingSelection();
 }}
 
 async function initUpload(file) {{
@@ -1096,17 +1345,59 @@ async function processFile(file) {{
   }}
 }}
 
-async function handleFileSelection(event) {{
-  const files = Array.from(event.target.files || []);
-  if (!files.length) return;
-  for (const file of files) {{
-    try {{
-      await processFile(file);
-    }} catch (_err) {{
-      // Status already rendered on the upload card.
+function handleFileSelection(event) {{
+  pendingFiles.length = 0;
+  for (const file of Array.from(event.target.files || [])) {{
+    pendingFiles.push(file);
+  }}
+  renderPendingSelection();
+}}
+
+async function startSelectedUploads() {{
+  if (!pendingFiles.length) return;
+
+  const startButton = document.getElementById('start-upload-btn');
+  const clearButton = document.getElementById('clear-upload-selection-btn');
+  const fileInput = document.getElementById('file-input');
+  const status = document.getElementById('upload-selection-status');
+  const summary = document.getElementById('selected-files-summary');
+  const files = pendingFiles.slice();
+  let finished = false;
+
+  startButton.disabled = true;
+  clearButton.disabled = true;
+  fileInput.disabled = true;
+  status.textContent = 'Uploading ' + files.length + ' file(s)…';
+
+  try {{
+    for (const file of files) {{
+      try {{
+        await processFile(file);
+      }} catch (_err) {{
+        // Status already rendered on the upload card.
+      }}
+    }}
+    pendingFiles.length = 0;
+    fileInput.value = '';
+    finished = true;
+  }} finally {{
+    fileInput.disabled = false;
+    if (finished) {{
+      startButton.disabled = true;
+      clearButton.disabled = true;
+      status.textContent = 'Upload finished.';
+      summary.textContent = '';
+    }} else {{
+      renderPendingSelection();
     }}
   }}
-  event.target.value = '';
+}}
+
+async function deleteFile(fileId) {{
+  const confirmed = await openConfirmDialog('Delete this file now?', 'Delete');
+  if (!confirmed) return;
+  await fetchJson('/web/api/files/' + encodeURIComponent(fileId), {{ method: 'DELETE' }});
+  await refreshFiles();
 }}
 
 async function refreshFiles() {{
@@ -1127,7 +1418,10 @@ async function refreshFiles() {{
         + '<div class="item-top">'
         + '<div><div class="item-title">' + escapeHtml(item.original_name) + '</div>'
         + '<div class="item-meta">Uploaded: ' + escapeHtml(formatDate(item.created_at)) + '</div></div>'
-        + '<div class="item-actions"><a class="button-like secondary" href="' + downloadUrl + '">Download</a></div>'
+        + '<div class="item-actions">'
+        + '<a class="button-like secondary" href="' + downloadUrl + '">Download</a>'
+        + '<button type="button" class="danger" data-action="delete-file" data-file-id="' + escapeHtml(item.file_id) + '">Delete</button>'
+        + '</div>'
         + '</div>'
         + '<div class="file-meta">'
         + '<div>Size: ' + escapeHtml(formatBytes(item.size)) + '</div>'
@@ -1146,7 +1440,54 @@ async function refreshFiles() {{
 window.addEventListener('DOMContentLoaded', async () => {{
   document.getElementById('save-clipboard-btn').addEventListener('click', saveClipboard);
   document.getElementById('file-input').addEventListener('change', handleFileSelection);
+  document.getElementById('start-upload-btn').addEventListener('click', startSelectedUploads);
+  document.getElementById('clear-upload-selection-btn').addEventListener('click', clearSelectedFiles);
   document.getElementById('refresh-files-btn').addEventListener('click', refreshFiles);
+  document.querySelectorAll('[data-tab]').forEach((button) => {{
+    button.addEventListener('click', () => switchTab(button.dataset.tab || 'clipboard'));
+  }});
+  document.getElementById('confirm-modal-cancel').addEventListener('click', () => closeConfirmDialog(false));
+  document.getElementById('confirm-modal-confirm').addEventListener('click', () => closeConfirmDialog(true));
+  document.getElementById('confirm-modal').addEventListener('click', (event) => {{
+    if (event.target.id === 'confirm-modal') closeConfirmDialog(false);
+  }});
+  document.addEventListener('keydown', (event) => {{
+    if (event.key === 'Escape' && confirmModalState) closeConfirmDialog(false);
+  }});
+  document.addEventListener('click', async (event) => {{
+    const button = event.target.closest('[data-action]');
+    if (!button) return;
+
+    const action = button.dataset.action;
+    if (action === 'copy-current') {{
+      await copyCurrentInput(button);
+      return;
+    }}
+    if (action === 'clear-current') {{
+      clearCurrentInput();
+      return;
+    }}
+    if (action === 'fill-clipboard') {{
+      fillClipboardItem(button.dataset.itemId || '');
+      return;
+    }}
+    if (action === 'copy-clipboard') {{
+      await copyClipboardItem(button.dataset.itemId || '', button);
+      return;
+    }}
+    if (action === 'delete-clipboard') {{
+      await deleteClipboardItem(button.dataset.itemId || '');
+      return;
+    }}
+    if (action === 'toggle-clipboard') {{
+      toggleClipboardExpand(button.dataset.itemId || '');
+      return;
+    }}
+    if (action === 'delete-file') {{
+      await deleteFile(button.dataset.fileId || '');
+    }}
+  }});
+  renderPendingSelection();
   try {{ await refreshClipboard(); }} catch (err) {{ document.getElementById('clipboard-list').innerHTML = '<div class="empty">Failed to load saved texts.</div>'; }}
   await refreshFiles();
 }});
@@ -1448,6 +1789,17 @@ async def web_files_list(request: Request):
         cleanup_stale_upload_sessions(username)
         items = sorted(load_user_files(username), key=lambda x: x.get("created_at") or "", reverse=True)
     return JSONResponse(items)
+
+
+@app.delete("/web/api/files/{file_id}")
+async def web_file_delete(request: Request, file_id: str):
+    username = require_json_login(request)
+    file_id = normalize_file_id(file_id)
+    async with get_user_state_lock(username):
+        ok = delete_user_file(username, file_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="File not found")
+    return JSONResponse({"ok": True, "deleted": True, "file_id": file_id})
 
 
 @app.get("/web/api/files/{file_id}/download")
