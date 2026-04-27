@@ -1,0 +1,15 @@
+app:
+  session_secret: replace-with-a-random-secret
+  session_max_age_seconds: 2592000
+  clipboard_history_limit: 100
+  clipboard_max_chars: 200000
+  web_file_retention_days: 7
+  web_upload_parallelism: 4
+
+users:
+  - username: example-user
+    display_name: Example User
+    password_hash: pbkdf2_sha256$390000$replace_this_salt$replace_this_digest
+  # - username: another-user
+  #   display_name: Another User
+  #   password_hash: pbkdf2_sha256$390000$replace_this_salt$replace_this_digest

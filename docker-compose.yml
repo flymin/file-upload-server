@@ -1,0 +1,14 @@
+services:
+  file-upload-server:
+    build: .
+    container_name: file-upload-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8091}:8091"
+    environment:
+      PORT: "${PORT:-8091}"
+      UPLOAD_TOKEN: "${UPLOAD_TOKEN:-}"
+      CONFIG_PATH: /app/config.yaml
+    volumes:
+      - "${DATA_DIR:-./data}:/app/data"
+      - "./config.yaml:/app/config.yaml:ro"
