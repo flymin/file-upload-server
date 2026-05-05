@@ -11,6 +11,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py ./
+COPY file_upload_server ./file_upload_server
 RUN mkdir -p /app/data/.chunks /app/data/web/users
 
 EXPOSE 8091

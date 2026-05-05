@@ -16,7 +16,7 @@ It includes:
 ```bash
 cp .env.example .env
 cp config.yaml.example config.yaml
-./hash-password.sh --yaml example-user
+./tools/hash-password.sh --yaml example-user
 docker compose up -d --build
 ```
 
@@ -30,6 +30,14 @@ The app runs on:
 
 ```text
 http://localhost:8091
+```
+
+## Structure
+
+```text
+file_upload_server/  FastAPI package
+tools/               Helper scripts
+server.py            Local entry point
 ```
 
 ## Runtime Files
