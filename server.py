@@ -784,6 +784,8 @@ def render_page(title: str, body: str) -> str:
     .tab-panel.active {{ display: block; }}
     .card {{ background: var(--card); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); padding: 22px; }}
     .card h2 {{ margin: 0 0 10px; font-size: 19px; }}
+    .section-header {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }}
+    .section-header h2 {{ margin: 0; }}
     .muted {{ color: var(--muted); font-size: 14px; }}
     textarea, input[type="text"], input[type="password"] {{
       width: 100%; border: 1px solid #cbd5e1; border-radius: 14px; padding: 14px 16px;
@@ -939,7 +941,14 @@ def render_app_page(username: str) -> str:
       </div>
     </section>
     <section class="card">
-      <h2>Saved texts</h2>
+      <div class="section-header">
+        <h2>Saved texts</h2>
+        <button id="refresh-clipboard-btn" type="button" class="secondary">Refresh</button>
+      </div>
+      <p class="muted">Auto-refreshes while this page is open.</p>
+      <div class="row" style="margin-bottom:12px;">
+        <span class="notice" id="clipboard-list-status"></span>
+      </div>
       <div id="clipboard-list" class="list"></div>
     </section>
   </div>
@@ -962,10 +971,12 @@ def render_app_page(username: str) -> str:
       <div id="upload-jobs" class="list" style="margin-top:14px;"></div>
     </section>
     <section class="card">
-      <h2>Your files</h2>
+      <div class="section-header">
+        <h2>Your files</h2>
+        <button id="refresh-files-btn" type="button" class="secondary">Refresh</button>
+      </div>
       <p class="muted">File list refresh triggers cleanup of expired files. Downloads are served as complete files with HTTP range support.</p>
       <div class="row" style="margin-bottom:12px;">
-        <button id="refresh-files-btn" type="button" class="secondary">Refresh files</button>
         <span class="notice" id="files-status"></span>
       </div>
       <div id="files-list" class="list"></div>
@@ -985,9 +996,16 @@ def render_app_page(username: str) -> str:
 <script>
 const CURRENT_USER = {username_js};
 const UPLOAD_PARALLELISM = {parallelism};
+const AUTO_REFRESH_MS = 15000;
 const pendingFiles = [];
 let clipboardItemsCache = [];
 let confirmModalState = null;
+let activeTabName = 'clipboard';
+let clipboardRefreshInFlight = false;
+let filesRefreshInFlight = false;
+let clipboardRefreshQueued = false;
+let filesRefreshQueued = false;
+let autoRefreshTimer = null;
 
 function escapeHtml(value) {{
   return String(value || '')
@@ -1015,6 +1033,10 @@ function formatDate(value) {{
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}}
+
+function formatRefreshTime() {{
+  return new Date().toLocaleTimeString([], {{ hour: '2-digit', minute: '2-digit', second: '2-digit' }});
 }}
 
 async function fetchJson(url, options) {{
@@ -1063,10 +1085,16 @@ function closeConfirmDialog(confirmed) {{
 
 function switchTab(tabName) {{
   const isClipboard = tabName !== 'files';
+  activeTabName = isClipboard ? 'clipboard' : 'files';
   document.getElementById('tab-clipboard').classList.toggle('active', isClipboard);
   document.getElementById('tab-files').classList.toggle('active', !isClipboard);
   document.getElementById('panel-clipboard').classList.toggle('active', isClipboard);
   document.getElementById('panel-files').classList.toggle('active', !isClipboard);
+  if (isClipboard) {{
+    refreshClipboard({{ silent: true }});
+  }} else {{
+    refreshFiles({{ silent: true }});
+  }}
 }}
 
 function flashButtonText(button, nextText, durationMs) {{
@@ -1118,34 +1146,60 @@ function toggleClipboardExpand(id) {{
   toggle.textContent = collapsed ? 'Expand' : 'Collapse';
 }}
 
-async function refreshClipboard() {{
-  const list = document.getElementById('clipboard-list');
-  list.innerHTML = '<div class="empty">Loading…</div>';
-  const items = await fetchJson('/web/api/clipboard/items');
-  clipboardItemsCache = Array.isArray(items) ? items : [];
-  if (!items.length) {{
-    list.innerHTML = '<div class="empty">No saved text yet.</div>';
+async function refreshClipboard(options) {{
+  const opts = options || {{}};
+  if (clipboardRefreshInFlight) {{
+    if (!opts.silent) clipboardRefreshQueued = true;
     return;
   }}
-  list.innerHTML = items.map((item) => {{
-    const text = String(item.text || '');
-    const needsCollapse = shouldCollapseText(text);
-    const textHtml = escapeHtml(text).replace(/\\n/g, '<br>');
-    return '<div class="item">'
-      + '<div class="item-top">'
-      + '<div></div>'
-      + '<div class="item-actions">'
-      + '<button type="button" class="secondary" data-action="fill-clipboard" data-item-id="' + escapeHtml(item.id) + '">Fill</button>'
-      + '<button type="button" class="secondary" data-action="copy-clipboard" data-item-id="' + escapeHtml(item.id) + '">Copy</button>'
-      + '<button type="button" class="danger" data-action="delete-clipboard" data-item-id="' + escapeHtml(item.id) + '">Delete</button>'
-      + '</div></div>'
-      + '<div id="clipboard-text-' + escapeHtml(item.id) + '" class="text-preview' + (needsCollapse ? ' collapsed' : '') + '">' + textHtml + '</div>'
-      + (needsCollapse
-          ? '<div class="text-toggle"><button type="button" class="link-button" id="clipboard-toggle-' + escapeHtml(item.id) + '" data-action="toggle-clipboard" data-item-id="' + escapeHtml(item.id) + '">Expand</button></div>'
-          : '')
-      + '<div class="item-meta">Updated: ' + escapeHtml(formatDate(item.updated_at)) + '</div>'
-      + '</div>';
-  }}).join('');
+  const list = document.getElementById('clipboard-list');
+  const status = document.getElementById('clipboard-list-status');
+  const button = document.getElementById('refresh-clipboard-btn');
+  clipboardRefreshInFlight = true;
+  if (button) button.disabled = true;
+  if (status) status.textContent = opts.silent ? 'Auto-refreshing…' : 'Refreshing…';
+  if (!opts.silent || !list.innerHTML) {{
+    list.innerHTML = '<div class="empty">Loading…</div>';
+  }}
+  try {{
+    const items = await fetchJson('/web/api/clipboard/items');
+    clipboardItemsCache = Array.isArray(items) ? items : [];
+    if (!clipboardItemsCache.length) {{
+      list.innerHTML = '<div class="empty">No saved text yet.</div>';
+      if (status) status.textContent = 'No saved text. Updated ' + formatRefreshTime() + '.';
+      return;
+    }}
+    list.innerHTML = clipboardItemsCache.map((item) => {{
+      const text = String(item.text || '');
+      const needsCollapse = shouldCollapseText(text);
+      const textHtml = escapeHtml(text).replace(/\\n/g, '<br>');
+      return '<div class="item">'
+        + '<div class="item-top">'
+        + '<div></div>'
+        + '<div class="item-actions">'
+        + '<button type="button" class="secondary" data-action="fill-clipboard" data-item-id="' + escapeHtml(item.id) + '">Fill</button>'
+        + '<button type="button" class="secondary" data-action="copy-clipboard" data-item-id="' + escapeHtml(item.id) + '">Copy</button>'
+        + '<button type="button" class="danger" data-action="delete-clipboard" data-item-id="' + escapeHtml(item.id) + '">Delete</button>'
+        + '</div></div>'
+        + '<div id="clipboard-text-' + escapeHtml(item.id) + '" class="text-preview' + (needsCollapse ? ' collapsed' : '') + '">' + textHtml + '</div>'
+        + (needsCollapse
+            ? '<div class="text-toggle"><button type="button" class="link-button" id="clipboard-toggle-' + escapeHtml(item.id) + '" data-action="toggle-clipboard" data-item-id="' + escapeHtml(item.id) + '">Expand</button></div>'
+            : '')
+        + '<div class="item-meta">Updated: ' + escapeHtml(formatDate(item.updated_at)) + '</div>'
+        + '</div>';
+    }}).join('');
+    if (status) status.textContent = 'Loaded ' + clipboardItemsCache.length + ' saved text(s). Updated ' + formatRefreshTime() + '.';
+  }} catch (err) {{
+    if (status) status.textContent = 'Refresh failed: ' + err.message;
+    if (!list.innerHTML || !opts.silent) list.innerHTML = '<div class="empty">Failed to load saved texts.</div>';
+  }} finally {{
+    clipboardRefreshInFlight = false;
+    if (button) button.disabled = false;
+    if (clipboardRefreshQueued) {{
+      clipboardRefreshQueued = false;
+      refreshClipboard();
+    }}
+  }}
 }}
 
 async function saveClipboard() {{
@@ -1397,14 +1451,24 @@ async function deleteFile(fileId) {{
   await refreshFiles();
 }}
 
-async function refreshFiles() {{
+async function refreshFiles(options) {{
+  const opts = options || {{}};
+  if (filesRefreshInFlight) {{
+    if (!opts.silent) filesRefreshQueued = true;
+    return;
+  }}
   const status = document.getElementById('files-status');
   const list = document.getElementById('files-list');
-  status.textContent = 'Refreshing…';
-  list.innerHTML = '<div class="empty">Loading…</div>';
+  const button = document.getElementById('refresh-files-btn');
+  filesRefreshInFlight = true;
+  if (button) button.disabled = true;
+  status.textContent = opts.silent ? 'Auto-refreshing…' : 'Refreshing…';
+  if (!opts.silent || !list.innerHTML) {{
+    list.innerHTML = '<div class="empty">Loading…</div>';
+  }}
   try {{
     const files = await fetchJson('/web/api/files');
-    status.textContent = files.length ? ('Loaded ' + files.length + ' file(s).') : 'No files.';
+    status.textContent = files.length ? ('Loaded ' + files.length + ' file(s). Updated ' + formatRefreshTime() + '.') : 'No files. Updated ' + formatRefreshTime() + '.';
     if (!files.length) {{
       list.innerHTML = '<div class="empty">No files available.</div>';
       return;
@@ -1430,8 +1494,32 @@ async function refreshFiles() {{
     }}).join('');
   }} catch (err) {{
     status.textContent = 'Refresh failed: ' + err.message;
-    list.innerHTML = '<div class="empty">Failed to load files.</div>';
+    if (!list.innerHTML || !opts.silent) list.innerHTML = '<div class="empty">Failed to load files.</div>';
+  }} finally {{
+    filesRefreshInFlight = false;
+    if (button) button.disabled = false;
+    if (filesRefreshQueued) {{
+      filesRefreshQueued = false;
+      refreshFiles();
+    }}
   }}
+}}
+
+function refreshVisibleLists(options) {{
+  if (document.hidden) return;
+  const opts = options || {{}};
+  if (activeTabName === 'files') {{
+    refreshFiles(opts);
+  }} else {{
+    refreshClipboard(opts);
+  }}
+}}
+
+function startAutoRefresh() {{
+  if (autoRefreshTimer) window.clearInterval(autoRefreshTimer);
+  autoRefreshTimer = window.setInterval(() => {{
+    refreshVisibleLists({{ silent: true }});
+  }}, AUTO_REFRESH_MS);
 }}
 
 window.addEventListener('DOMContentLoaded', async () => {{
@@ -1440,6 +1528,7 @@ window.addEventListener('DOMContentLoaded', async () => {{
   document.getElementById('start-upload-btn').addEventListener('click', startSelectedUploads);
   document.getElementById('clear-upload-selection-btn').addEventListener('click', clearSelectedFiles);
   document.getElementById('refresh-files-btn').addEventListener('click', refreshFiles);
+  document.getElementById('refresh-clipboard-btn').addEventListener('click', refreshClipboard);
   document.querySelectorAll('[data-tab]').forEach((button) => {{
     button.addEventListener('click', () => switchTab(button.dataset.tab || 'clipboard'));
   }});
@@ -1450,6 +1539,9 @@ window.addEventListener('DOMContentLoaded', async () => {{
   }});
   document.addEventListener('keydown', (event) => {{
     if (event.key === 'Escape' && confirmModalState) closeConfirmDialog(false);
+  }});
+  document.addEventListener('visibilitychange', () => {{
+    if (!document.hidden) refreshVisibleLists({{ silent: true }});
   }});
   document.addEventListener('click', async (event) => {{
     const button = event.target.closest('[data-action]');
@@ -1485,8 +1577,9 @@ window.addEventListener('DOMContentLoaded', async () => {{
     }}
   }});
   renderPendingSelection();
-  try {{ await refreshClipboard(); }} catch (err) {{ document.getElementById('clipboard-list').innerHTML = '<div class="empty">Failed to load saved texts.</div>'; }}
+  await refreshClipboard();
   await refreshFiles();
+  startAutoRefresh();
 }});
 </script>
 """
