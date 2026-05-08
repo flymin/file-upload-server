@@ -10,6 +10,7 @@ TOKEN_HEADER_NAME = "X-Upload-Token"
 UPLOAD_TOKEN = (os.environ.get("UPLOAD_TOKEN") or "").strip()
 SESSION_COOKIE_NAME = "file_upload_session"
 PBKDF2_ALGORITHM = "pbkdf2_sha256"
+LONG_SESSION_MAX_AGE_SECONDS = 10 * 365 * 24 * 60 * 60
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path((os.environ.get("CONFIG_PATH") or str(BASE_DIR / "config.yaml")).strip())
@@ -52,9 +53,11 @@ def load_config() -> dict:
     if not users:
         raise RuntimeError("config.yaml: at least one user with username/password_hash is required")
 
+    session_max_age = int(app_cfg.get("session_max_age_seconds", 0) or 0)
+
     return {
         "session_secret": session_secret.encode("utf-8"),
-        "session_max_age_seconds": int(app_cfg.get("session_max_age_seconds") or 2592000),
+        "session_max_age_seconds": session_max_age,
         "clipboard_history_limit": int(app_cfg.get("clipboard_history_limit") or 100),
         "clipboard_max_chars": int(app_cfg.get("clipboard_max_chars") or 200000),
         "web_file_retention_days": int(app_cfg.get("web_file_retention_days") or 7),

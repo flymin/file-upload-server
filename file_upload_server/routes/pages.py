@@ -3,15 +3,41 @@ from typing import Optional
 from fastapi import APIRouter, Form, Request
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from ..config import CONFIG_PATH, DATA_DIR, PORT, SESSION_COOKIE_NAME, SETTINGS, WEB_ROOT_DIR
+from ..config import CONFIG_PATH, DATA_DIR, LONG_SESSION_MAX_AGE_SECONDS, PORT, SESSION_COOKIE_NAME, SETTINGS, WEB_ROOT_DIR
+from ..pwa import FAVICON_SVG, get_png_icon, manifest_json
 from ..security import require_page_login, sanitize_next_url
 from ..state import completed_uploads, upload_tracker
 from ..ui import render_app_page, render_home_page, render_login_page
 from ..utils import auth_configured, create_session_token, verify_password
 
 router = APIRouter()
+
+
+@router.get("/manifest.webmanifest")
+async def web_manifest():
+    return Response(manifest_json(), media_type="application/manifest+json")
+
+
+@router.get("/favicon.svg")
+async def favicon_svg():
+    return Response(FAVICON_SVG, media_type="image/svg+xml")
+
+
+@router.get("/apple-touch-icon.png")
+async def apple_touch_icon():
+    return Response(get_png_icon(180), media_type="image/png")
+
+
+@router.get("/icon-192.png")
+async def icon_192():
+    return Response(get_png_icon(192), media_type="image/png")
+
+
+@router.get("/icon-512.png")
+async def icon_512():
+    return Response(get_png_icon(512), media_type="image/png")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -40,7 +66,7 @@ async def login_submit(
     response.set_cookie(
         SESSION_COOKIE_NAME,
         create_session_token(user["username"]),
-        max_age=SETTINGS["session_max_age_seconds"],
+        max_age=SETTINGS["session_max_age_seconds"] if SETTINGS["session_max_age_seconds"] > 0 else LONG_SESSION_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
         secure=request.url.scheme == "https",

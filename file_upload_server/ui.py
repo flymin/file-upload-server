@@ -1,14 +1,14 @@
 import html
 import json
-from urllib.parse import quote
 
 from .config import SETTINGS
+from .pwa import APP_NAME, THEME_COLOR
 from .ui_scripts import render_app_script
 from .ui_styles import STYLES
 
 
-FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">\n  <defs>\n    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">\n      <stop offset="0%" stop-color="#60a5fa"/>\n      <stop offset="100%" stop-color="#6366f1"/>\n    </linearGradient>\n  </defs>\n  <rect x="10" y="6" width="44" height="52" rx="10" fill="url(#g)"/>\n  <rect x="22" y="2" width="20" height="10" rx="5" fill="#1e293b" opacity="0.9"/>\n  <rect x="18" y="18" width="28" height="4" rx="2" fill="white" opacity="0.95"/>\n  <rect x="18" y="28" width="20" height="4" rx="2" fill="white" opacity="0.95"/>\n  <rect x="18" y="38" width="24" height="4" rx="2" fill="white" opacity="0.95"/>\n</svg>"""
-FAVICON_DATA_URI = "data:image/svg+xml," + quote(FAVICON_SVG)
+FAVICON_DATA_URI = "/favicon.svg"
+APP_ICON_URL = "/icon-192.png"
 
 
 
@@ -20,8 +20,14 @@ def render_page(title: str, body: str) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="{THEME_COLOR}" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="{APP_NAME}" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <title>{title_safe}</title>
-  <link rel="icon" href="{FAVICON_DATA_URI}" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="{FAVICON_DATA_URI}" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <style>
 {STYLES}
   </style>
@@ -37,7 +43,7 @@ def render_home_page() -> str:
     body = f"""
 <div class="topbar">
   <div class="brand">
-    <img class="brand-icon" src="{FAVICON_DATA_URI}" alt="favicon" />
+    <img class="brand-icon" src="{APP_ICON_URL}" alt="favicon" />
     <div>
       <h1>File Upload Server</h1>
     </div>
@@ -56,7 +62,7 @@ def render_login_page(next_url: str, error: str = "") -> str:
     body = f"""
 <div class="card login-card">
   <div class="brand" style="margin-bottom:18px;">
-    <img class="brand-icon" src="{FAVICON_DATA_URI}" alt="favicon" />
+    <img class="brand-icon" src="{APP_ICON_URL}" alt="favicon" />
     <div>
       <h1>Login</h1>
     </div>
@@ -90,7 +96,7 @@ def render_app_page(username: str) -> str:
     body = f"""
 <div class="topbar">
   <div class="brand">
-    <img class="brand-icon" src="{FAVICON_DATA_URI}" alt="favicon" />
+    <img class="brand-icon" src="{APP_ICON_URL}" alt="favicon" />
     <div>
       <h1>{display_name}</h1>
       <p>Private clipboard + private files. Web uploads auto-expire after {retention_days} days.</p>

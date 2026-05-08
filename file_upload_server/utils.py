@@ -85,8 +85,9 @@ def auth_configured() -> bool:
 def create_session_token(username: str) -> str:
     payload = {
         "sub": username,
-        "exp": int(time.time()) + max(60, SETTINGS["session_max_age_seconds"]),
     }
+    if SETTINGS["session_max_age_seconds"] > 0:
+        payload["exp"] = int(time.time()) + max(60, SETTINGS["session_max_age_seconds"])
     payload_b64 = b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = hmac.new(
         SETTINGS["session_secret"],
@@ -115,8 +116,12 @@ def get_current_user(request: Request) -> Optional[str]:
     except (ValueError, json.JSONDecodeError):
         return None
 
-    if int(payload.get("exp", 0)) < int(time.time()):
-        return None
+    if payload.get("exp") is not None:
+        try:
+            if int(payload.get("exp", 0)) < int(time.time()):
+                return None
+        except (TypeError, ValueError):
+            return None
 
     username = str(payload.get("sub") or "").strip()
     if not username or username not in SETTINGS["users"]:
