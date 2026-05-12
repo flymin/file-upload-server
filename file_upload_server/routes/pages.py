@@ -10,7 +10,7 @@ from ..pwa import FAVICON_SVG, get_png_icon, manifest_json
 from ..security import require_page_login, sanitize_next_url
 from ..state import completed_uploads, upload_tracker
 from ..ui import render_app_page, render_home_page, render_login_page
-from ..utils import auth_configured, create_session_token, verify_password
+from ..utils import auth_configured, create_session_token, get_current_user, verify_password
 
 router = APIRouter()
 
@@ -41,12 +41,16 @@ async def icon_512():
 
 
 @router.get("/", response_class=HTMLResponse)
-async def root_page():
+async def root_page(request: Request):
+    if get_current_user(request):
+        return RedirectResponse(url="/app", status_code=303)
     return render_home_page()
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(next: Optional[str] = None):
+async def login_page(request: Request, next: Optional[str] = None):
+    if get_current_user(request):
+        return RedirectResponse(url="/app", status_code=303)
     return render_login_page(sanitize_next_url(next))
 
 
